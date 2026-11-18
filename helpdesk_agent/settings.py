@@ -30,11 +30,18 @@ from typing import Any, Literal
 # in the web viewer work for our custom Python provider.
 SONNET_MODEL_ID = "claude-sonnet-5-5"
 HAIKU_MODEL_ID = "claude-haiku-5-5"
+# Previous-generation Haiku: follows system-prompt instructions more literally, which
+# makes planted prompt bugs easier to see. Note it costs MORE per token than Haiku 5.5.
+HAIKU_4_5_MODEL_ID = "claude-haiku-4-5"
 
 MODEL_PRICING_USD_PER_MILLION_TOKENS: dict[str, dict[str, float]] = {
     SONNET_MODEL_ID: {"input": 2.00, "output": 10.00},
     HAIKU_MODEL_ID: {"input": 0.10, "output": 0.50},
+    HAIKU_4_5_MODEL_ID: {"input": 1.00, "output": 5.00},
 }
+
+# Models that reject the `effort` setting (output_config.effort) with a 400 error.
+MODELS_WITHOUT_EFFORT_SUPPORT = frozenset({HAIKU_4_5_MODEL_ID})
 
 PromptVersion = Literal["v1_overhelpful", "v2_grounded"]
 ToolSchemaStyle = Literal["vague", "precise"]
@@ -45,10 +52,13 @@ class AgentSettings:
     """Every knob the demo turns. Defaults = the fixed, production-ready agent."""
 
     # ---- Model -----------------------------------------------------------------
-    # Lab 6 compares Sonnet vs Haiku on cost, latency and quality.
-    model: str = SONNET_MODEL_ID
+    # Default: Claude Haiku 5.5, the cheapest current model ($0.10 / $0.50 per 1M
+    # tokens). Lab 6 showed it matched Sonnet 5.5 on the regression suite at ~5% of
+    # the cost, so it is the production choice. Lab 6 still compares both.
+    model: str = HAIKU_MODEL_ID
     # Effort controls how much the model thinks. "low" keeps the demo fast and
-    # cheap; the agent's tasks are short and well specified.
+    # cheap; the agent's tasks are short and well specified. (Haiku 5.5 defaults to
+    # "medium" if not set, so we set it explicitly.)
     effort: Literal["low", "medium", "high"] = "low"
     max_output_tokens: int = 4000
 

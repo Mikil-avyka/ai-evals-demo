@@ -14,6 +14,14 @@ side, so the promptfoo viewer shows the failures (red) next to the fix (green).
 | 4 | Security | Prompt-only access control | Other employees' data leaked through tools |
 | 5 | Multi-turn | No conversation memory | "Make it Tuesday instead" leaves Monday booked |
 | 6 | Model choice + CI | (none) Sonnet vs Haiku | Quality vs cost vs latency, plus a CI pass-rate gate |
+| 7 | LLM-as-a-judge | A vague judge rubric | Measures the judge itself against human-labelled answers |
+
+### Two kinds of checks
+
+| Check type | Good for | Used in |
+|---|---|---|
+| **Code-based** (`javascript`, `regex`, `icontains`, `cost`, `latency`) | Exact, cheap, deterministic facts: which tool was called, what was retrieved, who accessed what | Labs 1–6 |
+| **LLM-as-a-judge** (`llm-rubric`, `context-faithfulness`) | Meaning, tone, safety, "did it invent anything?" | Labs 1, 2, 4, 5, 6, and Lab 7 calibrates the judge itself |
 
 The presenter script is in **[DEMO_RUNBOOK.md](DEMO_RUNBOOK.md)**.
 
@@ -65,6 +73,7 @@ evals/
   lab1_retrieval/ … lab6_model_comparison/   One promptfoo config per lab
   lab4_security/redteam_config.yaml          Automated red teaming
   lab6_model_comparison/regression_suite.csv Test cases editable in Excel
+  lab7_judge_calibration/                    Human-labelled golden answers to calibrate the judge
 .github/workflows/llm_evals.yml   CI gate: fail the PR if pass rate < 90%
 ```
 
@@ -86,6 +95,7 @@ On Windows, if promptfoo can't find Python, set `PROMPTFOO_PYTHON` in `.env`
 
 ```bash
 npm run lab1          # … lab6. Each evaluates the buggy vs the fixed build
+npm run lab7          # judge calibration (judge calls only, no agent calls)
 npm run view          # open the promptfoo web viewer (results of every run)
 npm run lab4:redteam  # automated red team (slow: pre-run it)
 npm run lab4:redteam-report
@@ -107,8 +117,10 @@ own cache. Its viewer keeps every past run anyway.
 
 ## Costs
 
-Each lab makes roughly 15–40 agent conversations (each with 1–4 Claude calls) plus
-grader calls on Claude Sonnet 5.5, with `effort: low`. With the cache warm,
+The agent runs on **Claude Haiku 5.5 at `effort: low`** by default (the cheapest
+current model; Lab 6 compares it with Sonnet 5.5). Graders and judges use Claude
+Sonnet 5.5: a stronger model grading a cheaper one. Each lab makes roughly 15–40
+agent conversations (each with 1–4 Claude calls) plus grader calls. With the cache warm,
 re-runs cost nothing. The red team is the expensive part. Keep `numTests` small.
 
 ## Extending

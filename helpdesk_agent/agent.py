@@ -39,7 +39,7 @@ import anthropic
 from helpdesk_agent import response_cache
 from helpdesk_agent.knowledge_base import build_retriever
 from helpdesk_agent.mock_hr_database import HRDatabase
-from helpdesk_agent.settings import SONNET_MODEL_ID, AgentSettings
+from helpdesk_agent.settings import MODELS_WITHOUT_EFFORT_SUPPORT, SONNET_MODEL_ID, AgentSettings
 from helpdesk_agent.system_prompts import build_system_prompt, build_user_message
 from helpdesk_agent.tools import HelpdeskToolExecutor, get_tool_schemas
 
@@ -212,16 +212,18 @@ class HelpdeskAgent:
         return answer_text, messages, stop_reason
 
     def _create_message(self, system_prompt: str, messages: list[dict[str, Any]]):
-        """One Messages API call. Thinking is left at the model default (adaptive);
-        `effort` keeps it short. No temperature: current models reject it."""
+        """One Messages API call. Thinking is left at the model default (adaptive on
+        the 5.5 models, off on Haiku 4.5); `effort` keeps it short where supported.
+        No temperature: current models reject it."""
         request: dict[str, Any] = {
             "model": self.settings.model,
             "max_tokens": self.settings.max_output_tokens,
             "system": system_prompt,
             "tools": self.tool_schemas,
             "messages": messages,
-            "output_config": {"effort": self.settings.effort},
         }
+        if self.settings.model not in MODELS_WITHOUT_EFFORT_SUPPORT:
+            request["output_config"] = {"effort": self.settings.effort}
         if self.settings.model == SONNET_MODEL_ID:
             return self.client.beta.messages.create(
                 **request, betas=[REFUSAL_FALLBACK_BETA], fallbacks="default"
