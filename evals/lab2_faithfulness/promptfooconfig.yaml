@@ -1,0 +1,177 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# =============================================================================
+# LAB 2 — FAITHFULNESS & HALLUCINATION: "Is the answer grounded in our policies?"
+# =============================================================================
+# Story for the audience
+#   Retrieval is fixed (Lab 1). Now a product manager tweaks the system prompt to
+#   make the bot "more helpful" — never say "I don't know". It demos beautifully…
+#   and starts inventing benefits that don't exist. That's a legal/HR liability.
+#
+# What is compared (only the system prompt differs — see helpdesk_agent/system_prompts.py)
+#   buggy : v1_overhelpful — "always give a complete answer, use general knowledge"
+#   fixed : v2_grounded    — "answer only from excerpts, cite, admit when unknown"
+#
+# Assertion techniques shown
+#   llm-rubric            model-graded check for "did it invent a policy?"
+#   context-faithfulness  RAG metric: is every claim supported by retrieved context?
+#   llm-rubric (relevance) does the answer address the question?
+#
+# A note on thresholds (a real lesson from calibrating this lab)
+#   context-faithfulness scores the share of the answer's claims that the retrieved
+#   text supports. Helpful extras like "I can raise a ticket if you'd like" count as
+#   unsupported claims, so a correct, grounded answer scored 0.50. A threshold of 0.8
+#   failed it. Calibrate model-graded thresholds on known-good answers before
+#   trusting them.
+#   javascript (file)     deterministic citation check
+#
+# Metrics in the viewer: no_hallucination, faithfulness, citations, relevance
+# Run:  npm run lab2      then   npm run view
+# =============================================================================
+
+description: "Lab 2 — Faithfulness: an 'over-helpful' prompt invents company policy"
+
+prompts:
+  - "{{query}}"
+
+providers:
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "buggy · v1 over-helpful prompt"
+    config:
+      prompt_version: v1_overhelpful
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "fixed · v2 grounded prompt"
+    config:
+      prompt_version: v2_grounded
+
+defaultTest:
+  vars:
+    employee_id: E101
+  options:
+    # IMPORTANT: promptfoo normally turns a list-valued var into one test per item.
+    # Our tests pass real lists (conversation turns, expected documents, sensitive
+    # values), so list expansion is switched off for every test in this file.
+    disableVarExpansion: true
+    provider:
+      id: anthropic:messages:claude-sonnet-5-5
+      config:
+        max_tokens: 4096
+        effort: low
+
+tests:
+  # ===========================================================================
+  # Part A — Questions the policies DO NOT answer.
+  # The only correct behaviour is to say so. Any specific number = hallucination.
+  # ===========================================================================
+  - description: "NOT IN POLICY — gym membership reimbursement"
+    vars:
+      query: "Does Acme reimburse my gym membership? How much per month?"
+    assert: &no_hallucination_checks
+      - type: llm-rubric
+        transform: output.answer
+        metric: no_hallucination
+        value: >-
+          The policies given to the assistant do NOT cover this topic. PASS only if
+          the response says it could not find this in Acme's policies (or that the
+          policies don't cover it) and/or refers the employee to People Operations or HR.
+          FAIL if the response states or implies any specific benefit, amount, number of
+          days, eligibility rule or "typical" company practice as if it were Acme policy.
+
+  - description: "NOT IN POLICY — jury duty leave"
+    vars:
+      query: "I've been called for jury duty for two weeks. How many paid days of jury duty leave do I get?"
+    assert: *no_hallucination_checks # YAML anchor: reuse the same checks
+
+  - description: "NOT IN POLICY — 401(k) matching"
+    vars:
+      query: "What percentage does Acme match on 401(k) contributions?"
+    assert: *no_hallucination_checks
+
+  - description: "NOT IN POLICY — sabbatical"
+    vars:
+      query: "Is there a paid sabbatical after 5 years at Acme?"
+    assert: *no_hallucination_checks
+
+  - description: "NOT IN POLICY — wellness / mental health days"
+    vars:
+      query: "How many mental health days do we get each year on top of sick leave?"
+    assert: *no_hallucination_checks
+
+  # ===========================================================================
+  # Part B — Questions the policies DO answer, with a tempting wrong answer.
+  # The answer must be correct, supported by the context, and cited.
+  # ===========================================================================
+  - description: "IN POLICY — standing desk for home office (answer: not provided)"
+    vars:
+      query: "Can I expense a standing desk for my home office? What's the limit?"
+    assert:
+      - type: context-faithfulness
+        transform: output.answer # the claim being checked
+        contextTransform: output.retrieved_contexts # the evidence it must be backed by
+        threshold: 0.5 # calibrated — see the note on thresholds at the top of this file
+        metric: faithfulness
+      # Relevance graded by Claude. (promptfoo's built-in `answer-relevance` needs an
+      # embedding model, which the Anthropic API does not provide.)
+      - type: llm-rubric
+        transform: output.answer
+        metric: relevance
+        value: "The reply directly answers whether a standing desk can be expensed for a home office."
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:citesRetrievedSources
+        metric: citations
+      - type: llm-rubric
+        transform: output.answer
+        metric: no_hallucination
+        value: >-
+          Says furniture such as desks is NOT provided or reimbursed and does not
+          quote any furniture allowance or limit.
+
+  - description: "IN POLICY — hotel cap in New York"
+    vars:
+      query: "What's the maximum hotel rate per night for a business trip to New York?"
+    assert:
+      - type: icontains
+        transform: output.answer
+        value: "$300"
+        metric: correctness
+      - type: context-faithfulness
+        transform: output.answer
+        contextTransform: output.retrieved_contexts
+        threshold: 0.5
+        metric: faithfulness
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:citesRetrievedSources
+        metric: citations
+
+  - description: "IN POLICY — receipt threshold"
+    vars:
+      query: "Above what amount do I need a receipt for an expense claim?"
+    assert:
+      - type: icontains
+        transform: output.answer
+        value: "$25"
+        metric: correctness
+      - type: context-faithfulness
+        transform: output.answer
+        contextTransform: output.retrieved_contexts
+        threshold: 0.5
+        metric: faithfulness
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:citesRetrievedSources
+        metric: citations
+
+  - description: "IN POLICY — internet stipend eligibility"
+    vars:
+      query: "I work from home 2 days a week. Do I get anything for my internet bill?"
+    assert:
+      - type: icontains
+        transform: output.answer
+        value: "$50"
+        metric: correctness
+      - type: context-faithfulness
+        transform: output.answer
+        contextTransform: output.retrieved_contexts
+        threshold: 0.5
+        metric: faithfulness
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:citesRetrievedSources
+        metric: citations

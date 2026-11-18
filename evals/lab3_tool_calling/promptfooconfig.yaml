@@ -1,0 +1,173 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# =============================================================================
+# LAB 3 — TOOL CALLING: "Does the agent take the RIGHT action with VALID data?"
+# =============================================================================
+# Story for the audience
+#   The answer text can look perfect while the agent quietly did the wrong thing:
+#   routed a broken laptop to HR, filed a ticket with priority "P2" that the
+#   ticketing system rejects, or booked leave for "next Monday" as a literal string.
+#   Text-only evals miss all of this. Here we assert on the ACTIONS.
+#
+# What is compared (only the tool definitions differ — see helpdesk_agent/tools.py)
+#   buggy : tool docs that drifted from the backend — create_it_ticket still says
+#           "asset inventory", a catch-all escalate_to_hr takes every problem,
+#           priority documented as P1–P4, dates documented as "next Monday"
+#   fixed : precise tool schemas — when-to-use / when-NOT-to-use, enums, ISO dates,
+#           required fields and `strict: true`
+#
+# Metrics in the viewer: tool_selection, argument_validity
+# Run:  npm run lab3      then   npm run view   (click a cell → see tool_calls JSON)
+# =============================================================================
+
+description: "Lab 3 — Tool calling: vague tool specs cause wrong actions and invalid data"
+
+prompts:
+  - "{{query}}"
+
+providers:
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "buggy · vague tool schemas"
+    config:
+      tool_schema_style: vague
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "fixed · precise tool schemas"
+    config:
+      tool_schema_style: precise
+
+defaultTest:
+  vars:
+    employee_id: E101 # Today in the mock HR system is Monday 2026-11-16
+  # Applied to EVERY test below: whatever tools were called, their arguments must
+  # be machine-valid (enums, YYYY-MM-DD). This is what a downstream system needs.
+  assert:
+    - type: javascript
+      value: file://../assertions/helpdesk_assertions.js:toolArgumentsAreValid
+      metric: argument_validity
+  options:
+    # IMPORTANT: promptfoo normally turns a list-valued var into one test per item.
+    # Our tests pass real lists (conversation turns, expected documents, sensitive
+    # values), so list expansion is switched off for every test in this file.
+    disableVarExpansion: true
+    provider:
+      id: anthropic:messages:claude-sonnet-5-5
+      config:
+        max_tokens: 4096
+        effort: low
+
+tests:
+  # ---------------------------------------------------------------------------
+  # Right tool, right category/priority
+  # ---------------------------------------------------------------------------
+  - description: "Cracked laptop screen → IT hardware ticket, NOT HR"
+    vars:
+      query: "I dropped my laptop this morning and the screen cracked. I can still work on an external monitor for now."
+      expected_tool: create_it_ticket
+      expected_args: { category: hardware, priority: [medium, high] }
+      forbidden_tools: [escalate_to_hr]
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+
+  - description: "Laptop dead before a client demo → hardware, high/critical"
+    vars:
+      query: "My laptop won't turn on at all and I have a client demo in two hours. I can't work."
+      expected_tool: create_it_ticket
+      expected_args: { category: hardware, priority: [high, critical] }
+      forbidden_tools: [escalate_to_hr]
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+
+  - description: "Phishing click → security ticket, critical"
+    vars:
+      query: "I clicked a link in a weird email and typed in my password before I realised. What do I do?"
+      expected_tool: create_it_ticket
+      expected_args: { category: security, priority: critical }
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+
+  - description: "Lost phone → security ticket, critical (per laptop & equipment policy)"
+    vars:
+      query: "I think I left my work phone on the train last night."
+      expected_tool: create_it_ticket
+      expected_args: { category: security, priority: critical }
+      forbidden_tools: [escalate_to_hr]
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+
+  - description: "Software install request → software ticket, low/medium"
+    vars:
+      query: "Can you get Docker Desktop installed on my laptop? I need it for a project starting next month."
+      expected_tool: create_it_ticket
+      expected_args: { category: software, priority: [low, medium] }
+      forbidden_tools: [escalate_to_hr]
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+
+  - description: "Monitor request for home office → hardware, low"
+    vars:
+      query: "I've just gone hybrid. Could I get an external monitor and a headset for home?"
+      expected_tool: create_it_ticket
+      expected_args: { category: hardware, priority: [low, medium] }
+      forbidden_tools: [escalate_to_hr]
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+
+  # ---------------------------------------------------------------------------
+  # Dates and enums for leave requests
+  # ---------------------------------------------------------------------------
+  - description: "'Next Monday' → submit_leave_request with ISO date 2026-11-23"
+    vars:
+      query: "Please book a day of annual leave for me next Monday."
+      expected_tool: submit_leave_request
+      expected_args: { employee_id: E101, start_date: "2026-11-23", end_date: "2026-11-23", leave_type: annual }
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+
+  - description: "Leave balance question → get_leave_balance for self"
+    vars:
+      query: "How many sick days do I have left this year?"
+      expected_tool: get_leave_balance
+      expected_args: { employee_id: E101 }
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+      - type: icontains
+        transform: output.answer
+        value: "8"
+        metric: tool_selection
+
+  # ---------------------------------------------------------------------------
+  # Correct use of escalation, and NOT acting when no action is needed
+  # ---------------------------------------------------------------------------
+  - description: "Harassment report → escalate_to_hr (and no IT ticket)"
+    vars:
+      query: "I want to report repeated inappropriate comments from a colleague. I'd like to talk to someone."
+      expected_tool: escalate_to_hr
+      expected_args: {}
+      forbidden_tools: [create_it_ticket]
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:calledExpectedTool
+        metric: tool_selection
+
+  - description: "Pure policy question → NO tool calls"
+    vars:
+      query: "What's the hotel cap in Zurich?"
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:madeNoToolCalls
+        metric: tool_selection

@@ -1,0 +1,4 @@
+# Python dependencies for the Helpdesk Copilot agent (the "system under test").
+# The retriever is pure Python (BM25), so the only real dependency is the Anthropic SDK.
+anthropic>=0.70.0
+python-dotenv>=1.0.0

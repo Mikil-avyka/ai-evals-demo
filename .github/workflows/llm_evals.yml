@@ -1,0 +1,65 @@
+# =============================================================================
+# CI REGRESSION GATE — run the Lab 6 regression suite on every pull request
+# =============================================================================
+# Why: a one-word prompt change, a new tool description or a model upgrade can
+# silently break behaviour that worked yesterday. This job runs the same eval
+# suite on every PR that touches the agent, its prompts or its knowledge base,
+# and FAILS the PR if the pass rate drops below the bar.
+#
+# Setup (one time): add ANTHROPIC_API_KEY under
+#   GitHub → Settings → Secrets and variables → Actions → New repository secret
+# =============================================================================
+
+name: LLM evals
+
+on:
+  pull_request:
+    paths:
+      - "helpdesk_agent/**"
+      - "knowledge_base/**"
+      - "data/**"
+      - "evals/**"
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+jobs:
+  regression-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # Always call the model in CI: the on-disk demo cache is for live presentations.
+      HELPDESK_CACHE: "0"
+      # promptfoo exits non-zero when the pass rate is below this percentage.
+      PROMPTFOO_PASS_RATE_THRESHOLD: "90"
+      PROMPTFOO_DISABLE_TELEMETRY: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          npm install --no-audit --no-fund
+
+      - name: Offline checks (no API calls)
+        run: npm run smoke-test
+
+      - name: Run regression suite (Claude Sonnet 5.5, production config)
+        run: npx promptfoo eval -c evals/lab6_model_comparison/promptfooconfig.yaml --filter-providers sonnet-5.5 --output eval-results.html --output eval-results.json
+
+      - name: Upload eval report
+        if: always() # keep the report even (especially!) when the gate fails
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-eval-report
+          path: |
+            eval-results.html
+            eval-results.json

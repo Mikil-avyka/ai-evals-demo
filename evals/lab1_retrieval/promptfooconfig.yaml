@@ -1,0 +1,174 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# =============================================================================
+# LAB 1 — RETRIEVAL QUALITY: "Is the RAG even fetching the right documents?"
+# =============================================================================
+# Story for the audience
+#   The copilot gives wrong or "I don't know" answers to questions that ARE in
+#   the policy documents. Everyone blames the LLM. This lab tests the RETRIEVER
+#   separately and shows the real culprit: chunking + top_k.
+#
+# What is compared (same agent, same prompt, same model — only retrieval differs)
+#   buggy : 80-word chunks, no overlap, top_k = 2  → rules get split apart
+#   fixed : 400-word chunks, 40-word overlap, top_k = 4
+#
+# Two named metrics appear in the promptfoo viewer:
+#   retrieval_hit   — did the retriever return the passage with the answer?
+#   answer_correct  — did the final answer contain the right fact?
+# Watch them move together: no retrieval hit → no correct answer.
+#
+# Run:  npm run lab1      then   npm run view
+# =============================================================================
+
+description: "Lab 1 — Retrieval: chunk size and top_k decide what the LLM can see"
+
+# The rendered prompt is just the employee's question. Everything else (system
+# prompt, retrieval, tools) happens inside the agent, exactly as in production.
+prompts:
+  - "{{query}}"
+
+providers:
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "buggy · 80-word chunks · top-2"
+    config:
+      chunk_size_words: 80
+      chunk_overlap_words: 0
+      top_k: 2
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "fixed · 400-word chunks · top-4"
+    config:
+      chunk_size_words: 400
+      chunk_overlap_words: 40
+      top_k: 4
+
+defaultTest:
+  vars:
+    employee_id: E101 # logged in as Priya Sharma, Software Engineer
+  options:
+    # IMPORTANT: promptfoo normally turns a list-valued var into one test per item.
+    # Our tests pass real lists (conversation turns, expected documents, sensitive
+    # values), so list expansion is switched off for every test in this file.
+    disableVarExpansion: true
+    # The "grader" model used by model-graded assertions (llm-rubric etc.).
+    # Same block appears in every lab so each config is self-contained.
+    provider:
+      id: anthropic:messages:claude-sonnet-5-5
+      config:
+        max_tokens: 4096
+        effort: low
+
+tests:
+  # ---------------------------------------------------------------------------
+  # The headline example: the carry-forward rule sits in a paragraph that does
+  # not repeat the words "carry forward", so small chunks lose it.
+  # ---------------------------------------------------------------------------
+  - description: "Carry-forward limit (answer is split from its heading)"
+    vars:
+      query: "How many unused annual leave days can I carry forward to next year?"
+      expected_passage: "A maximum of 5 days may be moved"
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:retrievedExpectedPassage
+        metric: retrieval_hit
+      # Regex, not a fixed string: the model may write "5 days", "five days" or
+      # "5 unused annual leave days" — all correct. (A literal "5 days" check failed
+      # a correct answer in our first run; brittle checks are an eval bug too.)
+      - type: regex
+        transform: output.answer # check the answer text, not the whole JSON result
+        value: "\\b(5|[Ff]ive)\\b[^.\\n]{0,40}\\bdays?\\b"
+        metric: answer_correct
+
+  - description: "Laptop refresh cycle for engineers"
+    vars:
+      query: "I'm a software engineer. How often do I get a new laptop?"
+      expected_passage: "Engineering and Data roles are refreshed every 3 years"
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:retrievedExpectedPassage
+        metric: retrieval_hit
+      - type: regex
+        transform: output.answer
+        value: "\\b(3|[Tt]hree)\\b[^.\\n]{0,20}\\byears?\\b"
+        metric: answer_correct
+
+  - description: "Cost of a second laptop damage incident"
+    vars:
+      query: "I damaged my laptop again — it's the second time in two years. Do I have to pay anything?"
+      expected_passage: "contributes 25% of the repair cost"
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:retrievedExpectedPassage
+        metric: retrieval_hit
+      - type: icontains
+        transform: output.answer
+        value: "25%"
+        metric: answer_correct
+
+  # ---------------------------------------------------------------------------
+  # Multi-document question: the answer needs TWO policies. With top_k = 2 and
+  # tiny chunks there is simply no room for both.
+  # ---------------------------------------------------------------------------
+  - description: "London trip — hotel cap AND meal limit (two documents)"
+    vars:
+      query: "I'm flying from Austin to London for a week of client meetings. What's my hotel limit per night and my daily meal limit?"
+      expected_documents: ["travel_policy.md", "expense_reimbursement_policy.md"]
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:retrievedAllExpectedDocuments
+        metric: retrieval_hit
+      - type: icontains-all
+        transform: output.answer
+        value: ["$300", "$90"]
+        metric: answer_correct
+
+  - description: "Working from abroad limit"
+    vars:
+      query: "Can I work from Portugal for a month next summer?"
+      expected_passage: "maximum of 20 working days per calendar year"
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:retrievedExpectedPassage
+        metric: retrieval_hit
+      - type: icontains
+        transform: output.answer
+        value: "20"
+        metric: answer_correct
+
+  - description: "Bereavement leave for an extended family member"
+    vars:
+      query: "My uncle passed away. How much bereavement leave can I take?"
+      expected_passage: "up to 2 days for an extended family member"
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:retrievedExpectedPassage
+        metric: retrieval_hit
+      - type: regex
+        transform: output.answer
+        value: "\\b(2|[Tt]wo)\\b[^.\\n]{0,30}\\bdays?\\b"
+        metric: answer_correct
+
+  - description: "When a medical certificate is needed"
+    vars:
+      query: "Do I need a doctor's note if I'm off sick for three days?"
+      expected_passage: "more than 2 consecutive working days"
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:retrievedExpectedPassage
+        metric: retrieval_hit
+      # A fuzzy answer check: the model may phrase "yes" many ways, so use a rubric.
+      - type: llm-rubric
+        transform: output.answer
+        value: "Says that YES, a medical certificate is required because the absence is more than 2 consecutive working days."
+        metric: answer_correct
+
+  - description: "Home office allowance (answer: there isn't one)"
+    vars:
+      query: "How much cash allowance do I get to set up my home office?"
+      expected_passage: "does not pay a cash allowance for home office setup"
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:retrievedExpectedPassage
+        metric: retrieval_hit
+      - type: llm-rubric
+        transform: output.answer
+        value: "States that there is NO cash home-office allowance, and mentions that equipment can be requested from IT instead. Does not quote any home-office allowance amount (mentioning the separate $50 monthly internet stipend is fine)."
+        metric: answer_correct

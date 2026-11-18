@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# =============================================================================
+# LAB 5 — MULTI-TURN CONVERSATIONS: "Does the agent remember what we just said?"
+# =============================================================================
+# Story for the audience
+#   Real users don't speak in perfect single questions. They say "book Monday",
+#   then "actually, make it Tuesday". Single-turn evals can't see this class of bug.
+#   Here each test is a whole CONVERSATION and we check the end STATE of the HR
+#   system — not just the last reply. A bot that says "Done, moved to Tuesday!"
+#   while leaving Monday booked is the worst kind of failure: confidently wrong.
+#
+# How multi-turn works in this demo
+#   Each test sets `vars.turns` to a list of user messages. The provider replays
+#   them in order against ONE conversation (see helpdesk_agent/promptfoo_provider.py).
+#   The `{{query}}` prompt is just a label shown in the viewer.
+#
+# What is compared
+#   buggy : use_conversation_memory = false  (each turn sent without history —
+#           a classic bug when session storage breaks or a load balancer drops state)
+#   fixed : use_conversation_memory = true
+#
+# Metrics in the viewer: final_state, conversation_quality
+# Run:  npm run lab5      then   npm run view
+# =============================================================================
+
+description: "Lab 5 — Multi-turn: corrections and follow-ups need conversation memory"
+
+prompts:
+  - "{{query}}"
+
+providers:
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "buggy · no conversation memory"
+    config:
+      use_conversation_memory: false
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "fixed · full conversation memory"
+    config:
+      use_conversation_memory: true
+
+defaultTest:
+  vars:
+    employee_id: E101 # today is Monday 2026-11-16
+  options:
+    # IMPORTANT: promptfoo normally turns a list-valued var into one test per item.
+    # Our tests pass real lists (conversation turns, expected documents, sensitive
+    # values), so list expansion is switched off for every test in this file.
+    disableVarExpansion: true
+    provider:
+      id: anthropic:messages:claude-sonnet-5-5
+      config:
+        max_tokens: 4096
+        effort: low
+
+tests:
+  - description: "Correction: 'make it Tuesday instead'"
+    vars:
+      query: "[2 turns] Book next Monday → change to Tuesday"
+      turns:
+        - "Please book a day of annual leave for me next Monday."
+        - "Actually, sorry — make it Tuesday instead."
+      expected_active_leave:
+        - { leave_type: annual, start_date: "2026-11-24", end_date: "2026-11-24" }
+    assert:
+      # The HR system must end with exactly ONE active request: Tuesday.
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:activeLeaveRequestsMatch
+        metric: final_state
+
+  # Uses a date 9 days out so the policy's 2-working-day notice rule is met. (Our
+  # first version used "today": the fixed agent correctly refused same-day annual
+  # leave per policy, and the TEST was wrong — evals need reviewing too.)
+  - description: "Correction: wrong leave type"
+    vars:
+      query: "[2 turns] Bereavement leave → oops, annual leave"
+      turns:
+        - "Please book a day of bereavement leave for me on 2026-11-25."
+        - "Sorry, wrong type — I meant annual leave, not bereavement. Same day."
+      expected_active_leave:
+        - { leave_type: annual, start_date: "2026-11-25", end_date: "2026-11-25" }
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:activeLeaveRequestsMatch
+        metric: final_state
+
+  - description: "Correction: shift a multi-day request, same length"
+    vars:
+      query: "[2 turns] 3 days from Dec 14 → start Dec 15 instead"
+      turns:
+        - "I need 3 days of annual leave starting 2026-12-14."
+        - "Sorry, I got that wrong — it should start on the 15th. Same number of days."
+      expected_active_leave:
+        - { leave_type: annual, start_date: "2026-12-15", end_date: "2026-12-17" }
+    assert:
+      - type: javascript
+        value: file://../assertions/helpdesk_assertions.js:activeLeaveRequestsMatch
+        metric: final_state
+
+  - description: "Follow-up that depends on the previous answer"
+    vars:
+      query: "[2 turns] My balance → how many of those carry over?"
+      turns:
+        - "How many annual leave days do I have left this year?"
+        - "And how many of those can I carry into next year?"
+    assert:
+      - type: llm-rubric
+        transform: output.answer
+        metric: conversation_quality
+        value: >-
+          This is the reply to the follow-up "how many of those can I carry into next
+          year?" from an employee with 12 annual leave days remaining. PASS if it says
+          at most 5 of the remaining days can be carried into next year (optionally
+          noting they must be used by 31 March and the rest lapse). FAIL if it asks
+          what "those" refers to, or gives a different limit.
+
+  - description: "Follow-up with an implicit subject"
+    vars:
+      query: "[2 turns] Hotel cap → what about London?"
+      turns:
+        - "What's the normal hotel limit per night on business trips?"
+        - "What about London?"
+    assert:
+      - type: icontains
+        transform: output.answer
+        value: "$300"
+        metric: conversation_quality

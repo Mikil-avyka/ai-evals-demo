@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# Agent response cache (see helpdesk_agent/response_cache.py)
+.cache/
+
+# promptfoo output artifacts written by --output
+output/
+redteam.yaml

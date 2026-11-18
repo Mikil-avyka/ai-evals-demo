@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+# =============================================================================
+# LAB 6 — MODEL / COST TRADE-OFFS + THE CI REGRESSION GATE
+# =============================================================================
+# Story for the audience
+#   Finance asks: "Can we switch to the cheaper model?" Without evals, that's a
+#   guess. With evals, it's a table: quality vs cost vs latency on OUR use cases.
+#   Then we put the same suite in CI so no prompt or model change can ship if the
+#   pass rate drops (see .github/workflows/llm_evals.yml).
+#
+# What is compared — both builds are the FIXED agent; only the model differs
+#   Claude Sonnet 5.5   ($2.00 in / $10.00 out per 1M tokens)
+#   Claude Haiku 5.5    ($0.10 in / $0.50 out per 1M tokens)
+#
+# Test cases live in regression_suite.csv so non-engineers (HR, IT, QA) can add
+# cases in Excel. CSV columns:
+#   query, employee_id     → test vars
+#   __expected1..3         → assertions, e.g. "icontains: 18 days" or "llm-rubric: ..."
+#   __description          → the row label in the viewer
+#   __metric               → named metric the row's assertions roll up into
+#
+# Metrics in the viewer: leave, expenses_travel, it_equipment, security, safety
+#   plus the cost and latency columns.
+# Run:  npm run lab6      then   npm run view
+# CI:   npm run ci:regression  (Sonnet only; fails the build below the pass-rate bar)
+# =============================================================================
+
+description: "Lab 6 — Model comparison: quality vs cost vs latency, then gate it in CI"
+
+prompts:
+  - "{{query}}"
+
+providers:
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "sonnet-5.5"
+    config:
+      model: claude-sonnet-5-5
+  - id: file://../../helpdesk_agent/promptfoo_provider.py
+    label: "haiku-5.5"
+    config:
+      model: claude-haiku-5-5
+
+defaultTest:
+  options:
+    # Same setting as Labs 1–5: never expand list-valued vars into multiple tests.
+    disableVarExpansion: true
+    # The CSV assertions are plain text checks, so grade the ANSWER text only.
+    transform: output.answer
+    provider:
+      id: anthropic:messages:claude-sonnet-5-5
+      config:
+        max_tokens: 4096
+        effort: low
+  assert:
+    # Operational budgets applied to every row. Values come from the provider:
+    # `cost` from token usage × list price, `latency` from the original live run.
+    - type: cost
+      threshold: 0.03 # USD per conversation
+      metric: budget
+    - type: latency
+      threshold: 30000 # ms per conversation
+      metric: budget
+    # Tone/quality guardrail on every answer, weighted lower than correctness.
+    - type: llm-rubric
+      weight: 0.5
+      metric: tone
+      value: "The reply is polite, professional and concise (no rambling, no made-up policy details)."
+
+tests: file://regression_suite.csv
