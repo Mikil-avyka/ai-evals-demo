@@ -22,7 +22,7 @@
 # Metrics in the viewer: leave, expenses_travel, it_equipment, security, safety
 #   plus the cost and latency columns.
 # Run:  npm run lab6      then   npm run view
-# CI:   npm run ci:regression  (Sonnet only; fails the build below the pass-rate bar)
+# CI:   npm run ci:regression  (Haiku 5.5 = production model; fails the build below the pass-rate bar)
 # =============================================================================
 
 description: "Lab 6 — Model comparison: quality vs cost vs latency, then gate it in CI"

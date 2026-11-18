@@ -52,8 +52,8 @@ jobs:
       - name: Offline checks (no API calls)
         run: npm run smoke-test
 
-      - name: Run regression suite (Claude Sonnet 5.5, production config)
-        run: npx promptfoo eval -c evals/lab6_model_comparison/promptfooconfig.yaml --filter-providers sonnet-5.5 --output eval-results.html --output eval-results.json
+      - name: Run regression suite (Claude Haiku 5.5 at low effort, production config)
+        run: npx promptfoo eval -c evals/lab6_model_comparison/promptfooconfig.yaml --filter-providers haiku-5.5 --output eval-results.html --output eval-results.json
 
       - name: Upload eval report
         if: always() # keep the report even (especially!) when the gate fails
